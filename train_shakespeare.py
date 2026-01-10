@@ -41,11 +41,11 @@ class TrainConfig:
     max_seq_len: int = 256
     
     # Training
-    batch_size: int = 64
+    batch_size: int = 128 
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
-    max_iters: int = 5000
-    eval_interval: int = 500
+    max_iters: int = 50000
+    eval_interval: int = 5000
     eval_iters: int = 200
     warmup_iters: int = 100
     min_lr: float = 1e-5
