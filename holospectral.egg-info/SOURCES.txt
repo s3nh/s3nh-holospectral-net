@@ -1,0 +1,15 @@
+LICENSE
+README.md
+pyproject.toml
+setup.py
+holospectral/__init__.py
+holospectral/config.py
+holospectral/layers.py
+holospectral/model.py
+holospectral/utils.py
+holospectral.egg-info/PKG-INFO
+holospectral.egg-info/SOURCES.txt
+holospectral.egg-info/dependency_links.txt
+holospectral.egg-info/requires.txt
+holospectral.egg-info/top_level.txt
+tests/test_model.py
