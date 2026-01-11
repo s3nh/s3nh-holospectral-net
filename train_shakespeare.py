@@ -243,7 +243,7 @@ def generate(
 
 def train(config: TrainConfig):
     """Main training function."""
-    
+    print("training bro") 
     # Set seed for reproducibility
     torch.manual_seed(config.seed)
     if torch.cuda.is_available():
