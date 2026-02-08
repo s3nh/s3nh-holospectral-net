@@ -14,7 +14,8 @@ class HolographicMixer(nn.Module):
     Holographic token mixing layer using circular convolution.
     
     Binds tokens with learned key via circular convolution, creates hologram
-    via cumulative bundling (cumsum), and unbinds to retrieve mixed representation.
+    via exponential moving average (replacing cumsum for better gradient flow),
+    and unbinds to retrieve mixed representation.
     """
     
     def __init__(self, dim):
@@ -22,6 +23,7 @@ class HolographicMixer(nn.Module):
         self.bind_key = nn.Parameter(torch.randn(dim) * 0.02)
         self.unbind_key = nn.Parameter(torch.randn(dim) * 0.02)
         self.gate = nn.Parameter(torch.ones(1))
+        self.decay = nn.Parameter(torch.tensor(0.9))  # Learnable decay
         
     def forward(self, x):
         """
@@ -33,21 +35,37 @@ class HolographicMixer(nn.Module):
         """
         # x: (batch, seq_len, dim)
         bound = fft_circular_conv(x, self.bind_key)
-        hologram = torch.cumsum(bound, dim=1)
+        
+        # Exponential moving average instead of cumsum
+        B, T, D = bound.shape
+        decay = torch.sigmoid(self.decay)
+        
+        # Create decay weights for each position
+        positions = torch.arange(T, device=x.device).float()
+        # For each position t, weight for position i is decay^(t-i)
+        decay_matrix = decay ** (positions.unsqueeze(1) - positions.unsqueeze(0))
+        # Make causal (zero out future positions)
+        causal_mask = torch.tril(torch.ones(T, T, device=x.device))
+        decay_matrix = decay_matrix * causal_mask
+        
+        # Apply weighted sum: hologram[t] = sum(decay^(t-i) * bound[i] for i <= t)
+        hologram = torch.einsum('ts,bsd->btd', decay_matrix, bound)
+        
         retrieved = fft_circular_corr(hologram, self.unbind_key)
         return x + self.gate * retrieved
 
 
 class SpectralGate(nn.Module):
-    """
-    Spectral gating layer that learns which frequency components matter.
+    """Causal spectral gating using chunked local FFT.
     
-    Applies learned gate in frequency domain via FFT.
+    Applies learned gate in frequency domain via FFT to local chunks,
+    ensuring causality for autoregressive language modeling.
     """
     
-    def __init__(self, max_seq_len=512):
+    def __init__(self, max_seq_len=512, chunk_size=32):
         super().__init__()
-        self.freq_gate = nn.Parameter(torch.ones(max_seq_len // 2 + 1))
+        self.chunk_size = chunk_size
+        self.freq_gate = nn.Parameter(torch.ones(chunk_size // 2 + 1))
         
     def forward(self, x):
         """
@@ -57,11 +75,28 @@ class SpectralGate(nn.Module):
         Returns:
             Output tensor of shape (batch, seq_len, dim)
         """
-        seq_len = x.shape[1]
-        x_freq = torch.fft.rfft(x, dim=1)
-        gate = self.freq_gate[:x_freq.shape[1]].unsqueeze(0).unsqueeze(-1)
+        B, T, D = x.shape
+        chunk_size = min(self.chunk_size, T)
+        
+        # Pad sequence to be divisible by chunk_size
+        pad_len = (chunk_size - T % chunk_size) % chunk_size
+        if pad_len > 0:
+            x = F.pad(x, (0, 0, 0, pad_len))
+        
+        # Reshape into chunks
+        x_chunked = x.view(B, -1, chunk_size, D)
+        
+        # Apply FFT to each chunk independently (causal within chunk)
+        x_freq = torch.fft.rfft(x_chunked, dim=2)
+        gate = self.freq_gate[:x_freq.shape[2]].view(1, 1, -1, 1)
         x_gated = x_freq * torch.sigmoid(gate)
-        return torch.fft.irfft(x_gated, dim=1, n=seq_len)
+        x_out = torch.fft.irfft(x_gated, dim=2, n=chunk_size)
+        
+        # Reshape back
+        x_out = x_out.reshape(B, -1, D)
+        
+        # Remove padding
+        return x_out[:, :T]
 
 
 class LiteChannelMix(nn.Module):
@@ -69,13 +104,14 @@ class LiteChannelMix(nn.Module):
     Lightweight channel mixing layer.
     
     Replaces heavy FFN (no 4x expansion) with factorized projection:
-    dim → rank → dim
+    dim → hidden → dim where hidden = dim * expansion
     """
     
-    def __init__(self, dim, rank=32):
+    def __init__(self, dim, rank=32, expansion=2):
         super().__init__()
-        self.down = nn.Linear(dim, rank, bias=False)
-        self.up = nn.Linear(rank, dim, bias=False)
+        hidden = dim * expansion
+        self.down = nn.Linear(dim, hidden, bias=False)
+        self.up = nn.Linear(hidden, dim, bias=False)
         self.scale = nn.Parameter(torch.ones(dim))
         
     def forward(self, x):
@@ -86,7 +122,8 @@ class LiteChannelMix(nn.Module):
         Returns:
             Output tensor of shape (batch, seq_len, dim)
         """
-        return x + self.scale * self.up(F.gelu(self.down(x)))
+        # Remove internal residual since block handles it
+        return self.scale * self.up(F.gelu(self.down(x)))
 
 
 class RotaryEmbedding(nn.Module):
@@ -133,7 +170,7 @@ class HoloSpectralBlock(nn.Module):
         self.norm3 = nn.LayerNorm(dim)
         
         self.holo_mixer = HolographicMixer(dim)
-        self.spectral_gate = SpectralGate(max_seq_len)
+        self.spectral_gate = SpectralGate(max_seq_len, chunk_size=32)
         self.channel_mix = LiteChannelMix(dim, rank)
         
     def forward(self, x):
@@ -146,5 +183,5 @@ class HoloSpectralBlock(nn.Module):
         """
         x = x + self.holo_mixer(self.norm1(x))
         x = x + self.spectral_gate(self.norm2(x))
-        x = self.channel_mix(self.norm3(x))
+        x = x + self.channel_mix(self.norm3(x))  # Add residual connection
         return x

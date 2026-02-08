@@ -34,20 +34,20 @@ class TrainConfig:
     data_path: str = "data/tinyshakespeare. txt"
     train_split: float = 0.9
     
-    # Model
-    dim: int = 256
-    depth: int = 6
-    rank: int = 32
+    # Model - increase capacity
+    dim: int = 384
+    depth: int = 8
+    rank: int = 96
     max_seq_len: int = 256
     
-    # Training
+    # Training - longer and gentler
     batch_size: int = 64
-    learning_rate: float = 3e-4
-    weight_decay: float = 0.1
-    max_iters: int = 5000
+    learning_rate: float = 1e-3
+    weight_decay: float = 0.01  # Reduced from 0.1
+    max_iters: int = 10000
     eval_interval: int = 500
     eval_iters: int = 200
-    warmup_iters: int = 100
+    warmup_iters: int = 500
     min_lr: float = 1e-5
     
     # Generation
