@@ -103,12 +103,18 @@ class LiteChannelMix(nn.Module):
     """
     Lightweight channel mixing layer.
     
-    Replaces heavy FFN (no 4x expansion) with factorized projection:
+    Replaces heavy FFN with factorized projection:
     dim → hidden → dim where hidden = dim * expansion
+    
+    Args:
+        dim: Input dimension
+        rank: Deprecated, kept for backward compatibility
+        expansion: Expansion factor for hidden dimension (default: 2)
     """
     
     def __init__(self, dim, rank=32, expansion=2):
         super().__init__()
+        # Note: rank parameter is deprecated but kept for backward compatibility
         hidden = dim * expansion
         self.down = nn.Linear(dim, hidden, bias=False)
         self.up = nn.Linear(hidden, dim, bias=False)

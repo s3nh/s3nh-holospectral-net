@@ -1,11 +1,11 @@
 """
-Tiny Shakespeare training script for HoloSpectralNet. 
+Tiny Shakespeare training script for HoloSpectralNet.
 
 Downloads the Tiny Shakespeare dataset and trains a character-level language model
-using the HoloSpectralNet architecture. 
+using the HoloSpectralNet architecture.
 
 Usage:
-    python train_shakespeare. py
+    python train_shakespeare.py
 """
 
 import os
@@ -31,7 +31,7 @@ class TrainConfig:
     """Training configuration for Tiny Shakespeare."""
     # Data
     data_url: str = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-    data_path: str = "data/tinyshakespeare. txt"
+    data_path: str = "data/tinyshakespeare.txt"
     train_split: float = 0.9
     
     # Model - increase capacity
@@ -58,7 +58,7 @@ class TrainConfig:
     # System
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 42
-    checkpoint_path: str = "checkpoints/shakespeare_holospectral. pt"
+    checkpoint_path: str = "checkpoints/shakespeare_holospectral.pt"
 
 
 # =============================================================================
@@ -94,7 +94,7 @@ class CharDataset(Dataset):
     
     def decode(self, tokens: torch.Tensor) -> str:
         """Decode token indices into a string."""
-        return ''.join([self.itos[t. item()] for t in tokens])
+        return ''.join([self.itos[t.item()] for t in tokens])
 
 
 def download_dataset(url: str, path: str) -> str:
@@ -126,7 +126,7 @@ def create_dataloaders(
     # Split into train and validation
     n = int(train_split * len(dataset))
     train_data = torch.utils.data.Subset(dataset, range(n))
-    val_data = torch.utils.data. Subset(dataset, range(n, len(dataset)))
+    val_data = torch.utils.data.Subset(dataset, range(n, len(dataset)))
     
     # Create dataloaders
     train_loader = DataLoader(
@@ -161,8 +161,8 @@ def get_lr(it: int, config: TrainConfig) -> float:
     if it > config.max_iters:
         return config.min_lr
     
-    decay_ratio = (it - config. warmup_iters) / (config.max_iters - config.warmup_iters)
-    coeff = 0.5 * (1.0 + math. cos(math.pi * decay_ratio))
+    decay_ratio = (it - config.warmup_iters) / (config.max_iters - config.warmup_iters)
+    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return config.min_lr + coeff * (config.learning_rate - config.min_lr)
 
 
@@ -191,7 +191,7 @@ def estimate_loss(
             
             x, y = x.to(device), y.to(device)
             logits = model(x)
-            loss = F.cross_entropy(logits. view(-1, logits.size(-1)), y.view(-1))
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), y.view(-1))
             losses.append(loss.item())
         
         out[split] = sum(losses) / len(losses)
@@ -222,11 +222,11 @@ def generate(
         
         # Get predictions
         logits = model(idx_cond)
-        logits = logits[:, -1, : ] / temperature
+        logits = logits[:, -1, :] / temperature
         
         # Apply top-k filtering
         if top_k is not None:
-            v, _ = torch.topk(logits, min(top_k, logits. size(-1)))
+            v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
             logits[logits < v[:, [-1]]] = float('-inf')
         
         # Sample
@@ -253,7 +253,7 @@ def train(config: TrainConfig):
     print("=" * 60)
     
     # Download and prepare data
-    text = download_dataset(config.data_url, config. data_path)
+    text = download_dataset(config.data_url, config.data_path)
     print(f"Dataset size: {len(text):,} characters")
     
     # Create dataloaders
@@ -275,9 +275,9 @@ def train(config: TrainConfig):
     ).to(config.device)
     
     num_params = model.count_parameters()
-    print(f"Model:  HoloSpectralNet")
+    print(f"Model: HoloSpectralNet")
     print(f"  - dim: {config.dim}")
-    print(f"  - depth:  {config.depth}")
+    print(f"  - depth: {config.depth}")
     print(f"  - rank: {config.rank}")
     print(f"  - max_seq_len: {config.max_seq_len}")
     print(f"  - Parameters: {num_params:,}")
@@ -323,7 +323,7 @@ def train(config: TrainConfig):
         loss.backward()
         
         # Gradient clipping
-        torch.nn. utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         
         optimizer.step()
         
@@ -342,16 +342,16 @@ def train(config: TrainConfig):
             # Save checkpoint if best
             if losses['val'] < best_val_loss:
                 best_val_loss = losses['val']
-                os.makedirs(os.path.dirname(config. checkpoint_path), exist_ok=True)
+                os.makedirs(os.path.dirname(config.checkpoint_path), exist_ok=True)
                 torch.save({
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'iter_num': iter_num,
                     'best_val_loss': best_val_loss,
                     'config': config,
-                    'vocab':  {'stoi': dataset.stoi, 'itos': dataset.itos}
+                    'vocab': {'stoi': dataset.stoi, 'itos': dataset.itos}
                 }, config.checkpoint_path)
-                print(f"  └── New best model saved!  (val_loss:  {best_val_loss:.4f})")
+                print(f"  └── New best model saved! (val_loss: {best_val_loss:.4f})")
     
     print()
     print("=" * 60)
@@ -380,6 +380,6 @@ def train(config: TrainConfig):
 # Entry Point
 # =============================================================================
 
-if __name__ == "__main__": 
+if __name__ == "__main__":
     config = TrainConfig()
     model, dataset = train(config)

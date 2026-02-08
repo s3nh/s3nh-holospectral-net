@@ -34,27 +34,6 @@ class TestHolographicMixerDecay(unittest.TestCase):
         
         self.assertIsNotNone(mixer.decay.grad)
         self.assertTrue(torch.isfinite(mixer.decay.grad).all())
-    
-    def test_causality(self):
-        """Test that HolographicMixer is causal (no future information)."""
-        mixer = HolographicMixer(dim=16)
-        mixer.eval()  # Disable dropout if any
-        
-        seq_len = 8
-        x = torch.randn(1, seq_len, 16)
-        
-        # Get full output
-        full_output = mixer(x)
-        
-        # Process only first part
-        partial_x = x[:, :seq_len//2, :]
-        partial_output = mixer(partial_x)
-        
-        # The partial output should match the first part of full output
-        # (up to numerical precision, but they won't be exactly equal due to
-        # the decay matrix computation, so we skip this test for now)
-        # This is acceptable since the decay is applied globally
-        pass
 
 
 class TestSpectralGateCausality(unittest.TestCase):
