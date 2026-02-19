@@ -26,29 +26,25 @@ class HolographicMixer(nn.Module):
         self.decay = nn.Parameter(torch.tensor(0.9))  # Learnable decay
         
     def forward(self, x):
-        """
-        Args:
-            x: Input tensor of shape (batch, seq_len, dim)
-            
-        Returns:
-            Output tensor of shape (batch, seq_len, dim)
-        """
         # x: (batch, seq_len, dim)
         bound = fft_circular_conv(x, self.bind_key)
         
-        # Exponential moving average instead of cumsum
         B, T, D = bound.shape
         decay = torch.sigmoid(self.decay)
         
-        # Create decay weights for each position
+        # Create ONLY non-negative exponents (causal: t >= s)
         positions = torch.arange(T, device=x.device).float()
-        # For each position t, weight for position i is decay^(t-i)
-        decay_matrix = decay ** (positions.unsqueeze(1) - positions.unsqueeze(0))
-        # Make causal (zero out future positions)
-        causal_mask = torch.tril(torch.ones(T, T, device=x.device))
-        decay_matrix = decay_matrix * causal_mask
+        # diff[t, s] = t - s, only keep where t >= s (lower triangle)
+        diff = positions.unsqueeze(1) - positions.unsqueeze(0)  # (T, T)
         
-        # Apply weighted sum: hologram[t] = sum(decay^(t-i) * bound[i] for i <= t)
+        # Clamp to non-negative AND apply causal mask in one step
+        # This avoids computing decay^(-255) which overflows
+        causal_mask = (diff >= 0)
+        diff = diff.clamp(min=0)
+        
+        decay_matrix = decay ** diff  # Now all exponents >= 0, so values in (0, 1]
+        decay_matrix = decay_matrix * causal_mask  # Zero out upper triangle
+        
         hologram = torch.einsum('ts,bsd->btd', decay_matrix, bound)
         
         retrieved = fft_circular_corr(hologram, self.unbind_key)
