@@ -41,11 +41,11 @@ class TrainConfig:
     max_seq_len: int = 256
     
     # Training - longer and gentler
-    batch_size: int = 64
-    learning_rate: float = 1e-3
+    batch_size: int = 128
+    learning_rate: float = 1e-5
     weight_decay: float = 0.01  # Reduced from 0.1
-    max_iters: int = 10000
-    eval_interval: int = 500
+    max_iters: int = 10**6
+    eval_interval: int = 5000 
     eval_iters: int = 200
     warmup_iters: int = 500
     min_lr: float = 1e-5
@@ -333,7 +333,19 @@ def train(config: TrainConfig):
                 model, train_loader, val_loader, 
                 config.eval_iters, config.device
             )
-            
+            # Generate sample text
+            print("\n📜 Sample Generation:")
+            print("-" * 60)
+            prompt = "ROMEO:"
+            generated = generate(
+                model, dataset, prompt,
+                max_new_tokens=config.gen_max_tokens,
+                temperature=config.gen_temperature,
+                top_k=config.gen_top_k,
+                device=config.device
+            )
+            print(generated)
+            print("-" * 60)
             print(f"Iter {iter_num + 1:5d} | "
                   f"Train Loss: {losses['train']:.4f} | "
                   f"Val Loss: {losses['val']:.4f} | "
