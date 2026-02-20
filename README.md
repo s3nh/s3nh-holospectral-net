@@ -311,6 +311,44 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Frequency-domain operations inspired by FNet and global filter networks
 - RoPE positional embeddings from RoFormer
 
+## Muon Optimizer split
+
+                    ┌─────────────────────────────────────────┐
+                    │          loss.backward()                │
+                    │   gradients flow to ALL parameters      │
+                    └──────────────┬──────────────────────────┘
+                                   │
+                    ┌──────────────┴──────────────┐
+                    │                             │
+            ┌───────▼───────┐             ┌───────▼───────┐
+            │  2D hidden    │             │  Everything   │
+            │  weights      │             │  else         │
+            │               │             │               │
+            │  channel_mix  │             │  embeddings   │
+            │  .down.weight │             │  LayerNorm    │
+            │  .up.weight   │             │  1D params    │
+            │               │             │  head         │
+            │  (per block)  │             │               │
+            └───────┬───────┘             └───────┬───────┘
+                    │                             │
+            ┌───────▼───────┐             ┌───────▼───────┐
+            │    MUON       │             │   AdamW       │
+            │               │             │               │
+            │ 1. Momentum   │             │ Standard      │
+            │ 2. Newton-    │             │ adaptive      │
+            │    Schulz     │             │ optimizer     │
+            │    orthogon.  │             │               │
+            │ 3. Scale      │             │               │
+            └───────┬───────┘             └───────┬───────┘
+                    │                             │
+                    └──────────────┬──────────────┘
+                                   │
+                    ┌──────────────▼──────────────┐
+                    │    Updated model weights     │
+                    └─────────────────────────────┘
+
+
+
 ## Contact
 
 For questions, issues, or contributions, please open an issue on GitHub. 
