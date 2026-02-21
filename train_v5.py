@@ -1,12 +1,11 @@
 """
-Stanford Alpaca trainer for HoloSpectralNet with Muon optimizer (v3).
+Stanford Alpaca trainer for HoloSpectralNet with AdamW optimizer (v3).
 
 Changes from v2:
 - Smaller vocab via tiktoken truncation to reduce embedding overparameterization
 - Dropout in LiteChannelMix and after embedding
 - Label smoothing on cross-entropy loss
 - Early stopping based on val loss patience
-- Reduced Muon LR to 0.005 (from 0.02) for 52K dataset scale
 - Data augmentation via random instruction-response shuffling per epoch
 - Cosine schedule min_lr raised to prevent late-training memorization
 
@@ -30,91 +29,6 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from holospectral import HoloSpectralNet
-
-
-# =============================================================================
-# Muon Optimizer (from KellerJordan/Muon, single-GPU)
-# https://github.com/KellerJordan/Muon/blob/master/muon.py
-# =============================================================================
-
-def zeropower_via_newtonschulz5(G: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """Newton-Schulz orthogonalization from KellerJordan/Muon."""
-    assert G.ndim >= 2
-    a, b, c = (3.4445, -4.7750, 2.0315)
-    X = G.bfloat16()
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) + 1e-7)
-    for _ in range(steps):
-        A = X @ X.mT
-        B = b * A + c * A @ A
-        X = a * X + B @ X
-    if G.size(-2) > G.size(-1):
-        X = X.mT
-    return X
-
-
-class Muon(torch.optim.Optimizer):
-    """Muon — MomentUm Orthogonalized by Newton-schulz. For 2D hidden weights only."""
-    def __init__(self, params, lr=0.02, momentum=0.95, nesterov=True,
-                 ns_steps=5, weight_decay=0.0):
-        defaults = dict(lr=lr, momentum=momentum, nesterov=nesterov,
-                        ns_steps=ns_steps, weight_decay=weight_decay)
-        super().__init__(params, defaults)
-
-    @torch.no_grad()
-    def step(self):
-        for group in self.param_groups:
-            lr = group["lr"]
-            momentum = group["momentum"]
-            nesterov = group["nesterov"]
-            ns_steps = group["ns_steps"]
-            wd = group["weight_decay"]
-            for p in group["params"]:
-                if p.grad is None:
-                    continue
-                g = p.grad
-                state = self.state[p]
-                if len(state) == 0:
-                    state["momentum_buffer"] = torch.zeros_like(g)
-                buf = state["momentum_buffer"]
-                buf.lerp_(g, 1 - momentum)
-                update = g.lerp_(buf, momentum) if nesterov else buf
-                update = zeropower_via_newtonschulz5(update, steps=ns_steps)
-                update *= max(1, update.size(-2) / update.size(-1)) ** 0.5
-                if wd > 0:
-                    p.data.mul_(1 - lr * wd)
-                p.data.add_(update.to(p.data.dtype), alpha=-lr)
-
-
-# =============================================================================
-# Parameter Split
-# =============================================================================
-
-def split_params_for_muon(model: nn.Module):
-    """Muon for 2D hidden weights, AdamW for everything else."""
-    muon_params, adamw_params = [], []
-    muon_names, adamw_names = [], []
-    for name, param in model.named_parameters():
-        if not param.requires_grad:
-            continue
-        is_hidden_2d = (
-            param.ndim == 2
-            and "channel_mix" in name
-            and "weight" in name
-            and "scale" not in name
-        )
-        if is_hidden_2d:
-            muon_params.append(param)
-            muon_names.append(name)
-        else:
-            adamw_params.append(param)
-            adamw_names.append(name)
-    print(f"  Muon:  {len(muon_params)} tensors, {sum(p.numel() for p in muon_params):,} params")
-    print(f"    → {', '.join(muon_names[:4])}{'...' if len(muon_names) > 4 else ''}")
-    print(f"  AdamW: {len(adamw_params)} tensors, {sum(p.numel() for p in adamw_params):,} params")
-    print(f"    → {', '.join(adamw_names[:4])}{'...' if len(adamw_names) > 4 else ''}")
-    return muon_params, adamw_params
 
 
 # =============================================================================
@@ -457,12 +371,7 @@ class AlpacaTrainConfig:
     max_seq_len: int = 512
     dropout: float = 0.1  # applied in wrapper
 
-    # Muon (hidden 2D weights)
-    muon_lr: float = 0.005         # reduced from 0.02
-    muon_momentum: float = 0.95
-    muon_ns_steps: int = 5
-
-    # AdamW (embeddings, norms, 1D params)
+    # AdamW
     adamw_lr: float = 3e-4         # reduced from 1e-3
     adamw_betas: Tuple[float, float] = (0.9, 0.95)
     adamw_weight_decay: float = 0.1
@@ -659,7 +568,7 @@ def train(config: AlpacaTrainConfig):
         torch.cuda.manual_seed(config.seed)
 
     print("=" * 70)
-    print("  HoloSpectralNet × Alpaca × Muon (v3 — anti-overfit)")
+    print("  HoloSpectralNet × Alpaca × AdamW (v3 — anti-overfit)")
     print("=" * 70)
     print(f"  Device: {config.device}")
 
@@ -715,45 +624,22 @@ def train(config: AlpacaTrainConfig):
     # ── Optimizers ───────────────────────────────────────────────────────
     print("\nOptimizers:")
 
-    # Use inner model names for split logic
-    muon_params, adamw_params = [], []
-    for name, param in model.named_parameters_inner():
-        if not param.requires_grad:
-            continue
-        is_hidden_2d = (
-            param.ndim == 2
-            and "channel_mix" in name
-            and "weight" in name
-            and "scale" not in name
-        )
-        if is_hidden_2d:
-            muon_params.append(param)
-        else:
-            adamw_params.append(param)
-
-    print(f"  Muon:  {len(muon_params)} tensors, "
-          f"{sum(p.numel() for p in muon_params):,} params")
-    print(f"  AdamW: {len(adamw_params)} tensors, "
-          f"{sum(p.numel() for p in adamw_params):,} params")
-
-    # Separate embedding params
+    # Separate embedding params for different weight decay
     emb_ids = set()
     emb_list = []
     for name, param in model.inner.named_parameters():
         if ("token_emb" in name or "head" in name) and param.requires_grad:
             emb_ids.add(id(param))
             emb_list.append(param)
-    other_adamw = [p for p in adamw_params if id(p) not in emb_ids]
+    other_params = [p for p in model.parameters() if p.requires_grad and id(p) not in emb_ids]
 
-    opt_muon = Muon(muon_params, lr=config.muon_lr,
-                    momentum=config.muon_momentum, ns_steps=config.muon_ns_steps)
     opt_adamw = torch.optim.AdamW([
         {"params": emb_list, "weight_decay": config.adamw_emb_wd},
-        {"params": other_adamw, "weight_decay": config.adamw_weight_decay},
+        {"params": other_params, "weight_decay": config.adamw_weight_decay},
     ], lr=config.adamw_lr, betas=config.adamw_betas)
 
-    print(f"\n  Muon  LR: {config.muon_lr}")
-    print(f"  AdamW LR: {config.adamw_lr}")
+    print(f"  AdamW: {sum(p.numel() for p in model.parameters() if p.requires_grad):,} params")
+    print(f"\n  AdamW LR: {config.adamw_lr}")
     print(f"  Label smoothing: {config.label_smoothing}")
     print(f"  Dropout: {config.dropout}")
     print(f"  Early stopping patience: {config.patience} evals")
@@ -786,8 +672,6 @@ def train(config: AlpacaTrainConfig):
             # LR schedule
             scale = get_lr_scale(global_step, total_steps,
                                  config.warmup_ratio, config.lr_floor)
-            for pg in opt_muon.param_groups:
-                pg["lr"] = config.muon_lr * scale
             for pg in opt_adamw.param_groups:
                 pg["lr"] = config.adamw_lr * scale
 
@@ -806,9 +690,7 @@ def train(config: AlpacaTrainConfig):
 
             # Step
             torch.nn.utils.clip_grad_norm_(model.parameters(), config.grad_clip)
-            opt_muon.step()
             opt_adamw.step()
-            opt_muon.zero_grad(set_to_none=True)
             opt_adamw.zero_grad(set_to_none=True)
             global_step += 1
 
@@ -869,7 +751,6 @@ def train(config: AlpacaTrainConfig):
                     tokenizer.save(config.tokenizer_path)
                     torch.save({
                         "model_state_dict": model.state_dict(),
-                        "opt_muon_state": opt_muon.state_dict(),
                         "opt_adamw_state": opt_adamw.state_dict(),
                         "global_step": global_step,
                         "epoch": epoch,
