@@ -348,6 +348,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
                     └─────────────────────────────┘
 
 
+## Dataset
+
+from tiny shakespeare to alpaca instruct,now we are here (24.02.2026)
+https://github.com/gururise/AlpacaDataCleaned/blob/main/alpaca_data.json
+
 
 ## Contact
 
